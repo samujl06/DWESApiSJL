@@ -2,10 +2,9 @@ import express from "express";
 import cors from "cors";
 import bcrypt from "bcryptjs"  // Hashing de contraseñas
 import jwt from "jsonwebtoken" // Generacion y verificacion de tokens
+import rateLimit from "express-rate-limit" // Control de límite de peticiones
 import swaggerUi from "swagger-ui-express"
 import swaggerDocument from "./openapi.json" with { type: "json" }
-// Para que swagger funcione correctamente en Vercel es necesario archivo vercel.json
-// y añadir configuración indicada en https://github.com/swagger-api/swagger-ui/issues/9924#issuecomment-3360835086
 
 
 const SECRET_KEY = "secreto"                 // Secreto para firmar el Access Token
@@ -30,6 +29,20 @@ let refreshTokens = []
 
 app.use(express.json())   // IMPORTANTE
 app.use(cors())           // Para habilitar CORS
+
+// Configuración del Rate Limit
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutos
+    max: 100, // Límite de 100 peticiones por ventana de tiempo por IP
+    standardHeaders: true, // Devuelve información del límite en las cabeceras `RateLimit-*`
+    legacyHeaders: false, // Desactiva las cabeceras `X-RateLimit-*`
+    message: { message: "Demasiadas peticiones desde esta IP, por favor inténtalo más tarde." }
+})
+
+// Aplicar el limitador a todas las rutas que comiencen por /api/
+app.use('/api/', limiter)
+
+
 app.use(
     "/api-docs",
     swaggerUi.serve,
