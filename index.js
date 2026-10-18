@@ -1,278 +1,288 @@
-import express from "express";
-import cors from "cors";
-import bcrypt from "bcryptjs"  // Hashing de contraseñas
-import jwt from "jsonwebtoken" // Generacion y verificacion de tokens
-import rateLimit from "express-rate-limit" // Control de límite de peticiones
+import { MongoClient } from 'mongodb'
+import express from "express"
+import cors from "cors"
+import bcrypt from "bcryptjs"
+import jwt from "jsonwebtoken"
+import rateLimit from "express-rate-limit"
 import swaggerUi from "swagger-ui-express"
 import swaggerDocument from "./openapi.json" with { type: "json" }
 
+const PUERTO = process.env.PORT || 3000
+const URL_BD = process.env.MONGODB_URI
+const NOMBRE_BD = process.env.DB_NAME || 'api'
+const SECRET_KEY = process.env.JWT_SECRET       // Firma el access token
+const REFRESH_KEY = process.env.REFRESH_SECRET  // Firma el refresh token
 
-const SECRET_KEY = "secreto"                 // Secreto para firmar el Access Token
-const REFRESH_SECRET_KEY = "secreto-refresh" // Secreto para firmar el Refresh Token
+if (!URL_BD || !SECRET_KEY || !REFRESH_KEY) {
+    console.error('Faltan variables de entorno: MONGODB_URI, JWT_SECRET y/o REFRESH_SECRET')
+    process.exit(1)
+}
+
 const app = express()
+app.set('trust proxy', 1)
+app.use(express.json())
+app.use(cors())
 
-
-let Users = [
-    { id: 0, nombre: "Samu", edad: 20, password: "$2b$10$9NjGG53sbqo0JlSjGf/siek.jQUC4Uvzw9Kc3jNVl7KE7dmcV.QB." }, // password: 123456
-    { id: 1, nombre: "Ana", edad: 25, password: "$2b$10$l/.WxXkTG6pKVB7KYU/KROXVvH7nAQqyrsq5PW1b.1X4v6L2u00u2" }, // password: ana
-    { id: 2, nombre: "Eva", edad: 28, password: "$2b$10$TW/qH6MQ/fd4sRijnHIdoekydhtIonurDMvxZHgqNaIR4st2A90Xe" }  // password: eva
-]
-
-let Ropa = [
-    { id: 0, tipo: "Camiseta", marca: "Nike", talla: "M", color: "Negro", material: "Algodón", precio: 19.99, stock: 35 },
-    { id: 1, tipo: "Pantalón", marca: "Levi's", talla: "L", color: "Azul", material: "Denim", precio: 59.9, stock: 20 }
-]
-
-// Array para almacenar los refresh tokens activos (en memoria)
-let refreshTokens = []
-
-
-app.use(express.json())   // IMPORTANTE
-app.use(cors())           // Para habilitar CORS
-
-// Configuración del Rate Limit
 const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutos
-    max: 100, // Límite de 100 peticiones por ventana de tiempo por IP
-    standardHeaders: true, // Devuelve información del límite en las cabeceras `RateLimit-*`
-    legacyHeaders: false, // Desactiva las cabeceras `X-RateLimit-*`
-    message: { message: "Demasiadas peticiones desde esta IP, por favor inténtalo más tarde." }
+    windowMs: 15 * 60 * 1000,
+    limit: 100,
+    message: { message: 'Demasiadas peticiones, inténtalo más tarde' }
 })
+app.use(limiter)
 
-// Aplicar el limitador a todas las rutas que comiencen por /api/
-app.use('/api/', limiter)
+const cliente = new MongoClient(URL_BD, { serverSelectionTimeoutMS: 5000 })
+try {
+    await cliente.connect()
+} catch (err) {
+    console.error('No se pudo conectar con MongoDB:', err.message)
+    process.exit(1)
+}
 
+const bd = cliente.db(NOMBRE_BD)
+const usuarios = bd.collection('users')
+const ropa = bd.collection('ropa')
+const SIN_PASSWORD = { projection: { password: 0 } } // La contraseña nunca se devuelve
 
-app.use(
-    "/api-docs",
-    swaggerUi.serve,
-    swaggerUi.setup(swaggerDocument)
-)
+if (await usuarios.countDocuments() === 0) {
+    await usuarios.insertMany([
+        { id: 0, nombre: "Samu", edad: 20, password: "$2b$10$DJaR.zEOJhgU2CA32EMaL.zImAjxfYPL7NCD9UG.dXdLOciuhzyXS" }, // password: 123456
+        { id: 1, nombre: "Ana", edad: 25, password: "$2b$10$l/.WxXkTG6pKVB7KYU/KROXVvH7nAQqyrsq5PW1b.1X4v6L2u00u2" }, // password: ana
+        { id: 2, nombre: "Eva", edad: 28, password: "$2b$10$TW/qH6MQ/fd4sRijnHIdoekydhtIonurDMvxZHgqNaIR4st2A90Xe" }  // password: eva
+    ])
+}
 
-
+if (await ropa.countDocuments() === 0) {
+    await ropa.insertMany([
+        { id: 0, nombre: "Camiseta básica", tipo: "Camiseta", talla: "M", color: "Blanco", precio: 15.99, stock: 50 },
+        { id: 1, nombre: "Pantalón vaquero", tipo: "Pantalón", talla: "40", color: "Azul", precio: 39.99, stock: 30 }
+    ])
+}
 
 function verifyToken(request, response, next) {
-    const token = request.headers.authorization?.split(" ")[1]; // formato "Bearer <token>"
+    const cabecera = request.headers.authorization || ''
+    const [esquema, token] = cabecera.split(' ')
 
-    if (!token) return response.status(403).json({ message: "Token requerido" });
+    if (esquema !== 'Bearer' || !token)
+        return response.status(401).json({ message: 'Token no proporcionado' })
 
     try {
-        request.user = jwt.verify(token, SECRET_KEY);
-        next();
-    } catch (err) {
-        return response.status(403).json({ message: "Token inválido o expirado" });
+        request.user = jwt.verify(token, SECRET_KEY)
+        next()
+    } catch {
+        return response.status(401).json({ message: 'Token no válido o caducado' })
     }
 }
 
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument))
 
-// Redirigir a la documentación de la API
 app.get("/", (request, response) => response.redirect("/api-docs"))
 
-
-// LOGIN
+// LOGIN PRINCIPAL
 app.post('/api/login', async (request, response) => {
     if (!request.is('json'))
         return response.json({ message: 'Debes proporcionar datos JSON' })
 
     const { nombre, password } = request.body
 
-    const user = Users.find(u => u.nombre == nombre)
+    if (!nombre || !password)
+        return response.status(400).json({ message: 'nombre y password son obligatorios' })
 
-    if (user == undefined) {
-        return response.json({ message: "Usuario no encontrado" })
+    const user = await usuarios.findOne({ nombre })
+
+    if (!user || !(await bcrypt.compare(password, user.password))) {
+        return response.status(401).json({ message: "Credenciales incorrectas" })
     }
 
-    // Comparamos la contraseña
-    const correctPassword = await bcrypt.compare(password, user.password)
+    const accessToken = jwt.sign(
+        { id: user._id, nombre: user.nombre },
+        SECRET_KEY,
+        { expiresIn: '15m' }
+    )
 
-    if (!correctPassword) {
-        return response.json({ message: "Contraseña incorrecta" })
-    }
+    const refreshToken = jwt.sign(
+        { id: user._id, nombre: user.nombre },
+        REFRESH_KEY,
+        { expiresIn: '7d' }
+    )
 
-    const payload = { id: user.id, nombre: user.nombre }
-
-    // Generamos el Access Token (corta duración: 5m)
-    const token = jwt.sign(payload, SECRET_KEY, { expiresIn: '5m' })
-
-    // Generamos el Refresh Token (larga duración: 7d)
-    const refreshToken = jwt.sign(payload, REFRESH_SECRET_KEY, { expiresIn: '7d' })
-
-    // Guardamos el refresh token en nuestra lista
-    refreshTokens.push(refreshToken)
-
-    // Devolvemos la estructura solicitada
-    response.json({
-        mensaje: "Inicio de sesión correcto",
-        token,
-        refreshToken
-    })
+    response.json({ accessToken, refreshToken })
 })
 
-
-// REFRESH TOKEN ENDPOINT
-app.post('/api/refresh-token', (request, response) => {
+// REFRESH TOKEN
+app.post('/api/refresh', async (request, response) => {
     if (!request.is('json'))
         return response.json({ message: 'Debes proporcionar datos JSON' })
 
     const { refreshToken } = request.body
+    if (!refreshToken) return response.status(401).json({ message: "Refresh token requerido" })
 
-    if (!refreshToken) {
-        return response.status(401).json({ message: "Refresh Token requerido" })
+    try {
+        const user = jwt.verify(refreshToken, REFRESH_KEY)
+        const accessToken = jwt.sign(
+            { id: user.id, nombre: user.nombre },
+            SECRET_KEY,
+            { expiresIn: '15m' }
+        )
+        response.json({ accessToken })
+    } catch (err) {
+        return response.status(401).json({ message: "Refresh token inválido o expirado" })
     }
-
-    if (!refreshTokens.includes(refreshToken)) {
-        return response.status(403).json({ message: "Refresh Token inválido o ya revocado" })
-    }
-
-    jwt.verify(refreshToken, REFRESH_SECRET_KEY, (err, user) => {
-        if (err) {
-            return response.status(403).json({ message: "Refresh Token expirado o inválido" })
-        }
-
-        const payload = { id: user.id, nombre: user.nombre }
-        const token = jwt.sign(payload, SECRET_KEY, { expiresIn: '5m' })
-
-        response.json({ token })
-    })
 })
 
+// -------------- Usuarios ------------------
 
-// LOGOUT
-app.post('/api/logout', (request, response) => {
-    const { refreshToken } = request.body
-    refreshTokens = refreshTokens.filter(t => t !== refreshToken)
-    response.json({ message: "Sesión cerrada correctamente" })
+app.get('/api/users', async (request, response) => {
+    const lista = await usuarios.find({}, SIN_PASSWORD).toArray()
+    response.json(lista)
 })
 
+app.get('/api/users/:id', async (request, response) => {
+    const id = Number(request.params.id)
+    if (!Number.isInteger(id))
+        return response.status(400).json({ message: 'Id no válido' })
 
-// -------------- USERS ------------------
-
-// GET
-app.get('/api/users', (request, response) => response.json(Users))
-
-// GET 
-app.get('/api/users/:id', (request, response) => {
-    let user = Users.find(u => u.id == request.params.id)
-
-    if (user !== undefined) {    
+    const user = await usuarios.findOne({ id }, SIN_PASSWORD)
+    if (user) {
         return response.json(user)
     } else {
-        response.json({ message: 'El elemento no ha sido encontrado' })
+        return response.status(404).json({ message: 'El elemento no ha sido encontrado' })
     }
 })
- 
 
-// POST 
 app.post('/api/users', verifyToken, async (request, response) => {
     if (!request.is('json'))
         return response.json({ message: 'Debes proporcionar datos JSON' })
 
-    let sig = Users.length > 0 ? Math.max(...Users.map(u => u.id)) + 1 : 0
-
     const { nombre, edad, password } = request.body
+
+    if (!nombre || !password)
+        return response.status(400).json({ message: 'nombre y password son obligatorios' })
+
+    if (await usuarios.findOne({ nombre }))
+        return response.status(409).json({ message: 'Ese usuario ya existe' })
+
+    const ultimo = await usuarios.find().sort({ id: -1 }).limit(1).toArray()
+    const id = ultimo.length ? ultimo[0].id + 1 : 0
     const hashedPassword = await bcrypt.hash(password, 10)
-    Users.push({ id: sig, nombre, edad, password: hashedPassword })
-    return response.json(Users)
+
+    await usuarios.insertOne({ id, nombre, edad, password: hashedPassword })
+    const lista = await usuarios.find({}, SIN_PASSWORD).toArray()
+    return response.json(lista)
 })
 
-
-// PUT
-app.put('/api/users/:id', verifyToken, (request, response) => {
+app.put('/api/users/:id', verifyToken, async (request, response) => {
     if (!request.is('json'))
         return response.json({ message: 'Debes proporcionar datos JSON' })
 
-    const { id } = request.params
+    const id = Number(request.params.id)
+    if (!Number.isInteger(id))
+        return response.status(400).json({ message: 'Id no válido' })
+
     const { nombre, edad } = request.body
+    const resultado = await usuarios.updateOne(
+        { id },
+        { $set: { nombre, edad } }
+    )
 
-    const pos = Users.findIndex(u => u.id == id)
-
-    if (pos != -1) {
-        const password = Users[pos].password
-        Users.splice(pos, 1, { id: Number(id), nombre, edad, password })
-        return response.json(Users)
+    if (resultado.matchedCount > 0) {
+        const lista = await usuarios.find({}, SIN_PASSWORD).toArray()
+        return response.json(lista)
     } else {
-        response.json({ message: 'El elemento no ha sido encontrado' })
+        return response.status(404).json({ message: 'El elemento no ha sido encontrado' })
     }
 })
 
-// DELETE
-app.delete('/api/users/:id', verifyToken, (request, response) => {
-    const pos = Users.findIndex(u => u.id == request.params.id)
+app.delete('/api/users/:id', verifyToken, async (request, response) => {
+    const id = Number(request.params.id)
+    if (!Number.isInteger(id))
+        return response.status(400).json({ message: 'Id no válido' })
 
-    if (pos != -1) {
-        Users.splice(pos, 1)
-        return response.json(Users)
+    const resultado = await usuarios.deleteOne({ id })
+
+    if (resultado.deletedCount > 0) {
+        const lista = await usuarios.find({}, SIN_PASSWORD).toArray()
+        return response.json(lista)
     } else {
-        response.json({ message: 'El elemento no ha sido encontrado' })
+        return response.status(404).json({ message: 'El elemento no ha sido encontrado' })
     }
 })
 
+// -------------- ROPA ------------------
 
-// -------------- ROPA (tienda) ------------------
+app.get('/api/ropa', async (request, response) => {
+    const lista = await ropa.find({}).toArray()
+    response.json(lista)
+})
 
-// GET
-app.get('/api/ropa', (request, response) => response.json(Ropa))
+app.get('/api/ropa/:id', async (request, response) => {
+    const id = Number(request.params.id)
+    if (!Number.isInteger(id))
+        return response.status(400).json({ message: 'Id no válido' })
 
-// GET 
-app.get('/api/ropa/:id', (request, response) => {
-    let prenda = Ropa.find(r => r.id == request.params.id)
-
-    if (prenda !== undefined) {    
+    const prenda = await ropa.findOne({ id })
+    if (prenda) {
         return response.json(prenda)
     } else {
-        response.json({ message: 'El elemento no ha sido encontrado' })
+        return response.status(404).json({ message: 'El elemento no ha sido encontrado' })
     }
 })
 
-
-// POST 
-app.post('/api/ropa', verifyToken, (request, response) => {
+app.post('/api/ropa', verifyToken, async (request, response) => {
     if (!request.is('json'))
         return response.json({ message: 'Debes proporcionar datos JSON' })
 
-    let sig = Ropa.length > 0 ? Math.max(...Ropa.map(r => r.id)) + 1 : 0
+    const { nombre, tipo, talla, color, precio, stock } = request.body
 
-    const { tipo, marca, talla, color, material, precio, stock } = request.body
-    Ropa.push({ id: sig, tipo, marca, talla, color, material, precio, stock })
-    return response.json(Ropa)
+    const ultimo = await ropa.find().sort({ id: -1 }).limit(1).toArray()
+    const id = ultimo.length ? ultimo[0].id + 1 : 0
+
+    await ropa.insertOne({ id, nombre, tipo, talla, color, precio, stock })
+    const lista = await ropa.find({}).toArray()
+    return response.json(lista)
 })
 
-
-// PUT
-app.put('/api/ropa/:id', verifyToken, (request, response) => {
+app.put('/api/ropa/:id', verifyToken, async (request, response) => {
     if (!request.is('json'))
         return response.json({ message: 'Debes proporcionar datos JSON' })
 
-    const { id } = request.params
-    const { tipo, marca, talla, color, material, precio, stock } = request.body
+    const id = Number(request.params.id)
+    if (!Number.isInteger(id))
+        return response.status(400).json({ message: 'Id no válido' })
 
-    const pos = Ropa.findIndex(r => r.id == id)
+    const { nombre, tipo, talla, color, precio, stock } = request.body
+    const resultado = await ropa.updateOne(
+        { id },
+        { $set: { nombre, tipo, talla, color, precio, stock } }
+    )
 
-    if (pos != -1) {
-        Ropa.splice(pos, 1, { id: Number(id), tipo, marca, talla, color, material, precio, stock })
-        return response.json(Ropa)
+    if (resultado.matchedCount > 0) {
+        const lista = await ropa.find({}).toArray()
+        return response.json(lista)
     } else {
-        response.json({ message: 'El elemento no ha sido encontrado' })
+        return response.status(404).json({ message: 'El elemento no ha sido encontrado' })
     }
 })
 
-// DELETE
-app.delete('/api/ropa/:id', verifyToken, (request, response) => {
-    const pos = Ropa.findIndex(r => r.id == request.params.id)
+app.delete('/api/ropa/:id', verifyToken, async (request, response) => {
+    const id = Number(request.params.id)
+    if (!Number.isInteger(id))
+        return response.status(400).json({ message: 'Id no válido' })
 
-    if (pos != -1) {
-        Ropa.splice(pos, 1)
-        return response.json(Ropa)
+    const resultado = await ropa.deleteOne({ id })
+
+    if (resultado.deletedCount > 0) {
+        const lista = await ropa.find({}).toArray()
+        return response.json(lista)
     } else {
-        response.json({ message: 'El elemento no ha sido encontrado' })
+        return response.status(404).json({ message: 'El elemento no ha sido encontrado' })
     }
 })
 
-const PORT = process.env.PORT || 3000
-
-app.listen(PORT, () => {
-    console.log(`Servidor web iniciado en puerto: 3001`)
-    console.log(`Documentación de Swagger disponible en: http://localhost:3001/api-docs`)
-})
+// En Vercel no se escucha en un puerto: se exporta la app
+if (!process.env.VERCEL) {
+    app.listen(PUERTO, () => {
+        console.log(`Servidor web iniciado en puerto: ${PUERTO}`)
+    })
+}
 
 export default app

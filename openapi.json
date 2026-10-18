@@ -3,7 +3,7 @@
   "info": {
     "title": "REST API - Tienda de Ropa",
     "version": "1.0.0",
-    "description": "API REST con autenticación JWT, Refresh Token y rate limit."
+    "description": "API REST con autenticación JWT, Refresh Token, rate limit y MongoDB (base de datos: api, colección: ropa y users)."
   },
   "components": {
     "securitySchemes": {
@@ -13,57 +13,60 @@
         "bearerFormat": "JWT"
       }
     },
-    "parameters": {
-      "id": {
-        "name": "id",
-        "in": "path",
-        "required": true,
-        "schema": {
-          "type": "integer"
-        }
-      }
-    },
-    "responses": {
-      "Ok": {
-        "description": "Respuesta exitosa de la operación"
-      },
-      "Unauthorized": {
-        "description": "Token requerido o inválido"
-      }
-    },
     "schemas": {
       "Auth": {
         "type": "object",
         "properties": {
           "nombre": { "type": "string", "example": "Samu" },
           "password": { "type": "string", "example": "123456" }
-        }
+        },
+        "required": ["nombre", "password"]
+      },
+      "Refresh": {
+        "type": "object",
+        "properties": {
+          "refreshToken": {
+            "type": "string",
+            "example": "tu_refresh_token_aqui"
+          }
+        },
+        "required": ["refreshToken"]
       },
       "User": {
         "type": "object",
         "properties": {
+          "id": { "type": "integer", "example": 0 },
           "nombre": { "type": "string", "example": "Ana" },
           "edad": { "type": "integer", "example": 22 },
           "password": { "type": "string", "example": "123456" }
-        }
+        },
+        "required": ["nombre", "password"]
       },
       "Ropa": {
         "type": "object",
         "properties": {
+          "id": { "type": "integer", "example": 1 },
           "tipo": { "type": "string", "example": "Camiseta" },
-          "marca": { "type": "string", "example": "Nike" },
           "talla": { "type": "string", "example": "M" },
-          "color": { "type": "string", "example": "Negro" },
-          "material": { "type": "string", "example": "Algodón" },
+          "color": { "type": "string", "example": "Azul" },
           "precio": { "type": "number", "example": 19.99 },
-          "stock": { "type": "integer", "example": 35 }
-        }
-      },
-      "RefreshToken": {
-        "type": "object",
-        "properties": {
-          "refreshToken": { "type": "string", "example": "eyJhbGciOi..." }
-        }
+          "stock": { "type": "integer", "example": 50 }
+        },
+        "required": [
+          "tipo",
+          "talla",
+          "color",
+          "precio",
+          "stock"
+        ]
+      }
+    },
+    "parameters": {
+      "id": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "integer" }
       }
     }
   },
@@ -72,108 +75,132 @@
       "post": {
         "summary": "Iniciar sesión",
         "tags": ["Authentication"],
-        "requestBody": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Auth" } } } },
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/Auth" }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Tokens de acceso y refresco" } }
       }
     },
     "/api/refresh": {
       "post": {
         "summary": "Renovar access token",
         "tags": ["Authentication"],
-        "requestBody": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RefreshToken" } } } },
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/Refresh" }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Nuevo accessToken" } }
       }
     },
     "/api/users": {
       "get": {
         "summary": "Listar usuarios",
         "tags": ["Users"],
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+        "responses": { "200": { "description": "Lista de usuarios" } }
       },
       "post": {
         "summary": "Crear usuario",
         "tags": ["Users"],
         "security": [{ "bearerAuth": [] }],
-        "requestBody": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/User" } } } },
-        "responses": {
-          "200": { "$ref": "#/components/responses/Ok" },
-          "403": { "$ref": "#/components/responses/Unauthorized" }
-        }
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/User" }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Usuario creado" } }
       }
     },
     "/api/users/{id}": {
       "get": {
-        "summary": "Obtener usuario",
+        "summary": "Obtener usuario por ID",
         "tags": ["Users"],
         "parameters": [{ "$ref": "#/components/parameters/id" }],
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+        "responses": { "200": { "description": "Usuario encontrado" } }
       },
       "put": {
         "summary": "Actualizar usuario",
         "tags": ["Users"],
         "security": [{ "bearerAuth": [] }],
         "parameters": [{ "$ref": "#/components/parameters/id" }],
-        "requestBody": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/User" } } } },
-        "responses": {
-          "200": { "$ref": "#/components/responses/Ok" },
-          "403": { "$ref": "#/components/responses/Unauthorized" }
-        }
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "nombre": { "type": "string" },
+                  "edad": { "type": "integer" }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Usuario actualizado" } }
       },
       "delete": {
         "summary": "Eliminar usuario",
         "tags": ["Users"],
         "security": [{ "bearerAuth": [] }],
         "parameters": [{ "$ref": "#/components/parameters/id" }],
-        "responses": {
-          "200": { "$ref": "#/components/responses/Ok" },
-          "403": { "$ref": "#/components/responses/Unauthorized" }
-        }
+        "responses": { "200": { "description": "Usuario eliminado" } }
       }
     },
     "/api/ropa": {
       "get": {
-        "summary": "Listar ropa",
+        "summary": "Listar prendas de ropa",
         "tags": ["Ropa"],
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+        "responses": { "200": { "description": "Lista de ropa" } }
       },
       "post": {
-        "summary": "Añadir prenda",
+        "summary": "Añadir prenda de ropa",
         "tags": ["Ropa"],
         "security": [{ "bearerAuth": [] }],
-        "requestBody": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Ropa" } } } },
-        "responses": {
-          "200": { "$ref": "#/components/responses/Ok" },
-          "403": { "$ref": "#/components/responses/Unauthorized" }
-        }
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/Ropa" }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Prenda añadida" } }
       }
     },
     "/api/ropa/{id}": {
       "get": {
-        "summary": "Obtener prenda",
+        "summary": "Obtener prenda por ID",
         "tags": ["Ropa"],
         "parameters": [{ "$ref": "#/components/parameters/id" }],
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+        "responses": { "200": { "description": "Prenda encontrada" } }
       },
       "put": {
         "summary": "Actualizar prenda",
         "tags": ["Ropa"],
         "security": [{ "bearerAuth": [] }],
         "parameters": [{ "$ref": "#/components/parameters/id" }],
-        "requestBody": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Ropa" } } } },
-        "responses": {
-          "200": { "$ref": "#/components/responses/Ok" },
-          "403": { "$ref": "#/components/responses/Unauthorized" }
-        }
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/Ropa" }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Prenda actualizada" } }
       },
       "delete": {
         "summary": "Eliminar prenda",
         "tags": ["Ropa"],
         "security": [{ "bearerAuth": [] }],
         "parameters": [{ "$ref": "#/components/parameters/id" }],
-        "responses": {
-          "200": { "$ref": "#/components/responses/Ok" },
-          "403": { "$ref": "#/components/responses/Unauthorized" }
-        }
+        "responses": { "200": { "description": "Prenda eliminada" } }
       }
     }
   }
