@@ -8,8 +8,8 @@ import swaggerDocument from "./openapi.json" with { type: "json" }
 // y añadir configuración indicada en https://github.com/swagger-api/swagger-ui/issues/9924#issuecomment-3360835086
 
 
-const SECRET_KEY = "secreto"         // Secreto para firmar el Access Token
-const REFRESH_SECRET_KEY = "secreto-refresh" // Secreto para firmar el Refresh Token (debe ser más seguro y distinto en producción)
+const SECRET_KEY = "secreto"                 // Secreto para firmar el Access Token
+const REFRESH_SECRET_KEY = "secreto-refresh" // Secreto para firmar el Refresh Token
 const app = express()
 
 
@@ -24,7 +24,7 @@ let Ropa = [
     { id: 1, tipo: "Pantalón", marca: "Levi's", talla: "L", color: "Azul", material: "Denim", precio: 59.9, stock: 20 }
 ]
 
-// Array para almacenar los refresh tokens activos (en producción se guardaría en Base de Datos)
+// Array para almacenar los refresh tokens activos (en memoria)
 let refreshTokens = []
 
 
@@ -79,15 +79,20 @@ app.post('/api/login', async (request, response) => {
     const payload = { id: user.id, nombre: user.nombre }
 
     // Generamos el Access Token (corta duración: 5m)
-    const accessToken = jwt.sign(payload, SECRET_KEY, { expiresIn: '5m' })
+    const token = jwt.sign(payload, SECRET_KEY, { expiresIn: '5m' })
 
     // Generamos el Refresh Token (larga duración: 7d)
     const refreshToken = jwt.sign(payload, REFRESH_SECRET_KEY, { expiresIn: '7d' })
 
-    // Guardamos el refresh token en nuestra lista (en memoria)
+    // Guardamos el refresh token en nuestra lista
     refreshTokens.push(refreshToken)
 
-    response.json({ accessToken, refreshToken })
+    // Devolvemos la estructura solicitada
+    response.json({
+        mensaje: "Inicio de sesión correcto",
+        token,
+        refreshToken
+    })
 })
 
 
@@ -102,30 +107,27 @@ app.post('/api/refresh-token', (request, response) => {
         return response.status(401).json({ message: "Refresh Token requerido" })
     }
 
-    // Validar si el token fue emitido y sigue guardado en el servidor
     if (!refreshTokens.includes(refreshToken)) {
         return response.status(403).json({ message: "Refresh Token inválido o ya revocado" })
     }
 
-    // Verificar firma y expiración del Refresh Token
     jwt.verify(refreshToken, REFRESH_SECRET_KEY, (err, user) => {
         if (err) {
             return response.status(403).json({ message: "Refresh Token expirado o inválido" })
         }
 
-        // Generar un nuevo Access Token
         const payload = { id: user.id, nombre: user.nombre }
-        const accessToken = jwt.sign(payload, SECRET_KEY, { expiresIn: '5m' })
+        const token = jwt.sign(payload, SECRET_KEY, { expiresIn: '5m' })
 
-        response.json({ accessToken })
+        response.json({ token })
     })
 })
 
 
-// LOGOUT (Opcional pero recomendado para invalidar el Refresh Token)
+// LOGOUT
 app.post('/api/logout', (request, response) => {
     const { refreshToken } = request.body
-    refreshTokens = refreshTokens.filter(token => token !== refreshToken)
+    refreshTokens = refreshTokens.filter(t => t !== refreshToken)
     response.json({ message: "Sesión cerrada correctamente" })
 })
 
@@ -139,7 +141,7 @@ app.get('/api/users', (request, response) => response.json(Users))
 app.get('/api/users/:id', (request, response) => {
     let user = Users.find(u => u.id == request.params.id)
 
-    if (user !== undefined) { // Si es encontrado    
+    if (user !== undefined) {    
         return response.json(user)
     } else {
         response.json({ message: 'El elemento no ha sido encontrado' })
@@ -169,27 +171,25 @@ app.put('/api/users/:id', verifyToken, (request, response) => {
     const { id } = request.params
     const { nombre, edad } = request.body
 
-    // Obtenemos posición    
     const pos = Users.findIndex(u => u.id == id)
 
-    if (pos != -1) { // Si es encontrado
+    if (pos != -1) {
         const password = Users[pos].password
         Users.splice(pos, 1, { id: Number(id), nombre, edad, password })
         return response.json(Users)
-    } else { // Sino
+    } else {
         response.json({ message: 'El elemento no ha sido encontrado' })
     }
 })
 
 // DELETE
 app.delete('/api/users/:id', verifyToken, (request, response) => {
-    // Obtenemos posición    
     const pos = Users.findIndex(u => u.id == request.params.id)
 
-    if (pos != -1) { // Si es encontrado
+    if (pos != -1) {
         Users.splice(pos, 1)
         return response.json(Users)
-    } else { // Sino
+    } else {
         response.json({ message: 'El elemento no ha sido encontrado' })
     }
 })
@@ -204,7 +204,7 @@ app.get('/api/ropa', (request, response) => response.json(Ropa))
 app.get('/api/ropa/:id', (request, response) => {
     let prenda = Ropa.find(r => r.id == request.params.id)
 
-    if (prenda !== undefined) { // Si es encontrado    
+    if (prenda !== undefined) {    
         return response.json(prenda)
     } else {
         response.json({ message: 'El elemento no ha sido encontrado' })
@@ -233,26 +233,24 @@ app.put('/api/ropa/:id', verifyToken, (request, response) => {
     const { id } = request.params
     const { tipo, marca, talla, color, material, precio, stock } = request.body
 
-    // Obtenemos posición    
     const pos = Ropa.findIndex(r => r.id == id)
 
-    if (pos != -1) { // Si es encontrado
+    if (pos != -1) {
         Ropa.splice(pos, 1, { id: Number(id), tipo, marca, talla, color, material, precio, stock })
         return response.json(Ropa)
-    } else { // Sino
+    } else {
         response.json({ message: 'El elemento no ha sido encontrado' })
     }
 })
 
 // DELETE
 app.delete('/api/ropa/:id', verifyToken, (request, response) => {
-    // Obtenemos posición    
     const pos = Ropa.findIndex(r => r.id == request.params.id)
 
-    if (pos != -1) { // Si es encontrado
+    if (pos != -1) {
         Ropa.splice(pos, 1)
         return response.json(Ropa)
-    } else { // Sino
+    } else {
         response.json({ message: 'El elemento no ha sido encontrado' })
     }
 })
