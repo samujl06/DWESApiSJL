@@ -8,7 +8,8 @@ import swaggerDocument from "./openapi.json" with { type: "json" }
 // y añadir configuración indicada en https://github.com/swagger-api/swagger-ui/issues/9924#issuecomment-3360835086
 
 
-const SECRET_KEY = "secreto" // Secreto para firmar y verificar el token
+const SECRET_KEY = "secreto"         // Secreto para firmar el Access Token
+const REFRESH_SECRET_KEY = "secreto-refresh" // Secreto para firmar el Refresh Token (debe ser más seguro y distinto en producción)
 const app = express()
 
 
@@ -23,6 +24,8 @@ let Ropa = [
     { id: 1, tipo: "Pantalón", marca: "Levi's", talla: "L", color: "Azul", material: "Denim", precio: 59.9, stock: 20 }
 ]
 
+// Array para almacenar los refresh tokens activos (en producción se guardaría en Base de Datos)
+let refreshTokens = []
 
 
 app.use(express.json())   // IMPORTANTE
@@ -44,7 +47,7 @@ function verifyToken(request, response, next) {
         request.user = jwt.verify(token, SECRET_KEY);
         next();
     } catch (err) {
-        return response.status(403).json({ message: "Token inválido" });
+        return response.status(403).json({ message: "Token inválido o expirado" });
     }
 }
 
@@ -73,14 +76,57 @@ app.post('/api/login', async (request, response) => {
         return response.json({ message: "Contraseña incorrecta" })
     }
 
-    // Generamos el token firmado con secreto
-    const token = jwt.sign(
-        { id: user.id, nombre: user.nombre },
-        SECRET_KEY,
-        { expiresIn: '5m' }
-    )
+    const payload = { id: user.id, nombre: user.nombre }
 
-    response.json({ token })
+    // Generamos el Access Token (corta duración: 5m)
+    const accessToken = jwt.sign(payload, SECRET_KEY, { expiresIn: '5m' })
+
+    // Generamos el Refresh Token (larga duración: 7d)
+    const refreshToken = jwt.sign(payload, REFRESH_SECRET_KEY, { expiresIn: '7d' })
+
+    // Guardamos el refresh token en nuestra lista (en memoria)
+    refreshTokens.push(refreshToken)
+
+    response.json({ accessToken, refreshToken })
+})
+
+
+// REFRESH TOKEN ENDPOINT
+app.post('/api/refresh-token', (request, response) => {
+    if (!request.is('json'))
+        return response.json({ message: 'Debes proporcionar datos JSON' })
+
+    const { refreshToken } = request.body
+
+    if (!refreshToken) {
+        return response.status(401).json({ message: "Refresh Token requerido" })
+    }
+
+    // Validar si el token fue emitido y sigue guardado en el servidor
+    if (!refreshTokens.includes(refreshToken)) {
+        return response.status(403).json({ message: "Refresh Token inválido o ya revocado" })
+    }
+
+    // Verificar firma y expiración del Refresh Token
+    jwt.verify(refreshToken, REFRESH_SECRET_KEY, (err, user) => {
+        if (err) {
+            return response.status(403).json({ message: "Refresh Token expirado o inválido" })
+        }
+
+        // Generar un nuevo Access Token
+        const payload = { id: user.id, nombre: user.nombre }
+        const accessToken = jwt.sign(payload, SECRET_KEY, { expiresIn: '5m' })
+
+        response.json({ accessToken })
+    })
+})
+
+
+// LOGOUT (Opcional pero recomendado para invalidar el Refresh Token)
+app.post('/api/logout', (request, response) => {
+    const { refreshToken } = request.body
+    refreshTokens = refreshTokens.filter(token => token !== refreshToken)
+    response.json({ message: "Sesión cerrada correctamente" })
 })
 
 
